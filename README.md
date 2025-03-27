@@ -19,5 +19,5 @@ PhytoFetch is a **Streamlit-based Python app** that allows users to **search for
 2. Install dependencies:
   pip install -r requirements.txt
 
-3.Run the app:
+ 3.Run the app:
   streamlit run phytofetch.py
