@@ -3,7 +3,7 @@ import os
 import re
 import pandas as pd
 import requests
-from bs4 import beautifulsoup
+from bs4 import BeautifulSoup
 
 # Set up Streamlit app
 st.title("Phytocompound Retrieval & 3D SDF Downloader")
