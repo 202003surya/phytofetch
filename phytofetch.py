@@ -3,7 +3,6 @@ import os
 import re
 import pandas as pd
 import requests
-import bs4
 from bs4 import beautifulsoup
 
 # Set up Streamlit app
