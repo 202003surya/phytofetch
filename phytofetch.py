@@ -1,123 +1,118 @@
 import streamlit as st
-import os
-import re
-import pandas as pd
 import requests
+import pandas as pd
+import os
+import datetime
+import io
+import re
 from bs4 import BeautifulSoup
 
-# Set up Streamlit app
-st.title("Phytocompound Retrieval & 3D SDF Downloader")
+# Initialize session state variables
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "plant_folder" not in st.session_state:
+    st.session_state.plant_folder = None
 
-# Ensure session state for phytochemical data
-if "phyto_data" not in st.session_state:
-    st.session_state["phyto_data"] = None
-
-# Input for plant name
-plant_name = st.text_input("Enter Plant Name:")
-
-# Function to retrieve phytochemical data from IMPPAT
-def fetch_phytochemicals(plant_name):
-    base_url = "https://cb.imsc.res.in/imppat/phytochemical/"
-    plant_name_formatted = plant_name.replace(" ", "%20")
-    plant_url = f"{base_url}{plant_name_formatted}"
-    
-    response = requests.get(plant_url)
-    if response.status_code != 200:
-        st.error("Failed to retrieve phytochemical data. Please check the plant name.")
-        return None
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    tables = soup.find_all("table")
-
-    if not tables:
-        st.warning("No phytochemical data found for this plant.")
-        return None
-
-    df_list = pd.read_html(str(tables))
-    phyto_data = df_list[0]  # Assuming first table has required data
-
-    # Save the data to session state
-    st.session_state["phyto_data"] = phyto_data
-    return phyto_data
-
-# Button to fetch phytochemicals
-if st.button("Search Phytochemicals"):
-    phyto_data = fetch_phytochemicals(plant_name)
-    if phyto_data is not None:
-        st.success("Phytochemicals retrieved successfully!")
-        st.write(phyto_data)
-
-# Load stored phytochemical data
-phyto_data = st.session_state.get("phyto_data", None)
-
-if phyto_data is not None and not phyto_data.empty:
-    # Display phytochemical table
-    st.subheader("Phytochemicals Found:")
-    st.write(phyto_data)
-
-    # Save data to Excel
-    # ✅ Create a single folder for the plant
-    plant_folder = os.path.join("Downloads", plant_name.replace(" ", "_"))
+# Function to create a folder for the plant
+def create_plant_folder(plant_name):
+    base_folder = "Downloaded_Files"
+    plant_folder = os.path.join(base_folder, plant_name.replace(" ", "_"))
     os.makedirs(plant_folder, exist_ok=True)
+    return plant_folder
 
-# ✅ Save Excel file inside the plant folder
-    excel_path = os.path.join(plant_folder, f"{plant_name.replace(' ', '_')}.xlsx")
-    phyto_data.to_excel(excel_path, index=False)
-    st.success(f"Saved phytochemical data as {excel_path}")
+# Function to download phytochemical data from IMPPAT
+def download_excel_from_imppat(plant_name):
+    plant_folder = create_plant_folder(plant_name)
+    plant_name_url = plant_name.replace(" ", "%20")
+    url = f"https://cb.imsc.res.in/imppat/phytochemical/{plant_name_url}"
+    
+    response = requests.get(url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table')
+        if table:
+            df = pd.read_html(io.StringIO(str(table)))[0]
+            df.columns = [col.lower().strip() for col in df.columns]  # Normalize column names
+            
+            if 'phytochemical name' not in df.columns or 'imppat phytochemical identifier' not in df.columns:
+                return None, None
 
-# ✅ Create a subfolder for SDF files inside the plant folder
-    sdf_folder = os.path.join(plant_folder, "SDF_Files")
-    os.makedirs(sdf_folder, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime("%d_%m_%Y_%H-%M-%S")
+            file_name = f"{plant_folder}/{plant_name.replace(' ', '_')}_phytochemicals_{timestamp}.xlsx"
+            df.to_excel(file_name, index=False)
+            
+            return df, plant_folder
+    return None, None
 
-    st.success(f"Saved phytochemical data as {plant_folder}")
+# Function to download SDF files from PubChem
+def download_sdf_from_pubchem(compound_name, plant_folder):
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound_name}/SDF"
+    response = requests.get(url)
 
-    # Choose database for 3D SDF download
-    st.subheader("Choose database for 3D SDF:")
-    database_option = st.radio("Choose database:", ("PubChem", "IMPPAT"))
+    if response.status_code == 200:
+        safe_compound_name = re.sub(r'[<>:"/\\|?*()\[\],\'\s]+', '_', compound_name)
+        file_path = os.path.join(plant_folder, f"{safe_compound_name}.sdf")
 
-    # Function to download 3D SDF files
-    def download_3d_sdf_files(database, phyto_data):
-        download_folder = f"Downloads/{plant_name.replace(' ', '_')}_SDFs"
-        os.makedirs(download_folder, exist_ok=True)
+        with open(file_path, "wb") as file:
+            file.write(response.content)
+        return f"✅ Downloaded {compound_name} from PubChem."
+    else:
+        return f"❌ Failed to download {compound_name} from PubChem."
 
-        for index, row in phyto_data.iterrows():
-            compound_name = row["Phytochemical name"]
-            if database == "PubChem":
-                # Fetch CID from PubChem
-                pubchem_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound_name}/cids/JSON"
-                response = requests.get(pubchem_url)
+# Function to download SDF files from IMPPAT
+def download_sdf_from_imppat(imppat_id, plant_folder):
+    file_path = os.path.join(plant_folder, f"{imppat_id}.sdf")
 
-                if response.status_code == 200 and "IdentifierList" in response.json():
-                    cid = response.json()["IdentifierList"]["CID"][0]
-                    sdf_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/SDF"
-                    sdf_path = os.path.join(download_folder, f"{compound_name}.sdf")
+    if os.path.exists(file_path):
+        return f"⚠️ {imppat_id} already exists. Skipping download."
 
-                    sdf_response = requests.get(sdf_url)
-                    if sdf_response.status_code == 200:
-                        with open(sdf_path, "wb") as file:
-                            file.write(sdf_response.content)
-                        st.success(f"Downloaded {compound_name}.sdf from PubChem")
-                    else:
-                        st.error(f"Failed to download {compound_name}.sdf from PubChem")
-                else:
-                    st.error(f"Failed to find CID for {compound_name}")
+    url = f"https://cb.imsc.res.in/imppat/images/3D/SDF/{imppat_id}_3D.sdf"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        with open(file_path, "wb") as file:
+            file.write(response.content)
+        return f"✅ Downloaded {imppat_id} from IMPPAT."
+    else:
+        return f"❌ Failed to download {imppat_id} from IMPPAT."
 
-            elif database == "IMPPAT":
-                imp_id = row["IMPPAT Phytochemical identifier"]
-                sdf_url = f"https://cb.imsc.res.in/imppat/images/3D/SDF/{imp_id}_3D.sdf"
-                sdf_path = os.path.join(download_folder, f"{imp_id}.sdf")
+# Streamlit UI
+st.title("🌿 Phytochemical Data & 3D SDF Downloader")
+st.subheader("Enter a plant name to fetch phytochemical data")
 
-                sdf_response = requests.get(sdf_url)
-                if sdf_response.status_code == 200:
-                    with open(sdf_path, "wb") as file:
-                        file.write(sdf_response.content)
-                    st.success(f"Downloaded {imp_id}.sdf from IMPPAT")
-                else:
-                    st.error(f"Failed to download {imp_id}.sdf from IMPPAT")
+plant_name = st.text_input("Enter the plant name:")
+if st.button("Fetch Phytochemicals"):
+    if plant_name:
+        df, plant_folder = download_excel_from_imppat(plant_name)
+        if df is not None:
+            st.session_state.df = df  # Store dataframe in session state
+            st.session_state.plant_folder = plant_folder  # Store folder path
+            st.success("✅ Phytochemicals retrieved successfully.")
+        else:
+            st.error("❌ Failed to retrieve phytochemicals. Check the plant name.")
 
-    # Button to download 3D SDF files
-    if st.button("Download 3D SDF Files"):
-        download_3d_sdf_files(database_option, phyto_data)
+# Show dataframe if it exists
+if st.session_state.df is not None:
+    st.dataframe(st.session_state.df)
 
-else:
-    st.error("No phytochemical data found. Please search for a plant first.")
+    # Database selection (Stored in session state)
+    if "database_choice" not in st.session_state:
+        st.session_state.database_choice = "PubChem"
+
+    database_choice = st.radio(
+        "📥 Choose database for SDF files:",
+        ["PubChem", "IMPPAT"],
+        index=0,
+        key="database_choice"
+    )
+
+    if st.button("Download SDF Files"):
+        if database_choice == "PubChem":
+            results = [download_sdf_from_pubchem(compound, st.session_state.plant_folder)
+                       for compound in st.session_state.df['phytochemical name']]
+        else:
+            results = [download_sdf_from_imppat(imppat_id, st.session_state.plant_folder)
+                       for imppat_id in st.session_state.df['imppat phytochemical identifier']]
+        
+        for res in results:
+            st.write(res)
