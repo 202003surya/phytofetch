@@ -1,16 +1,3 @@
-# Ignore Python cache and logs
-__pycache__/
-*.pyc
-*.pyo
-*.log
-
-# Ignore virtual environments
-venv/
-env/
-
-# Ignore Streamlit cache
-.streamlit/
-
 # Ignore data files
 Downloads/
 *.sdf
